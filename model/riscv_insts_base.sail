@@ -409,8 +409,8 @@ function clause execute (STORE(imm, rs2, rs1, width, aq, rl)) = {
                 _    => report_invalid_width(__FILE__, __LINE__, width, "store"),
               };
               match (res) {
-                MemValue(true)  => RETIRE_SUCCESS,
-                MemValue(false) => internal_error(__FILE__, __LINE__, "store got false from mem_write_value"),
+                MemValue(_)  => RETIRE_SUCCESS,
+                //MemValue(false) => internal_error(__FILE__, __LINE__, "store got false from mem_write_value"),
                 MemException(e) => { handle_mem_exception(vaddr, e); RETIRE_FAIL }
               }
             }

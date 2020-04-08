@@ -8,6 +8,8 @@
 
 /* The emulator fetch-execute-interrupt dispatch loop. */
 
+val check_cycle_count = { c: "cycle_count" } : unit -> unit
+
 /* returns whether to increment the step count in the trace */
 function step(step_no : int) -> bool = {
   /* for step extensions */
@@ -47,6 +49,10 @@ function step(step_no : int) -> bool = {
           },
           /* non-error cases: */
           F_RVC(h) => {
+            if h == 0x0000 then {
+              exit()
+            };
+            __instr_announce(h);
             instbits = zero_extend(h);
             let ast = ext_decode_compressed(h);
             if   get_config_print_instr()
@@ -63,6 +69,7 @@ function step(step_no : int) -> bool = {
              }
           },
           F_Base(w) => {
+            __instr_announce(w);
             instbits = zero_extend(w);
             let ast = ext_decode(w);
             if   get_config_print_instr()
@@ -86,6 +93,8 @@ function step(step_no : int) -> bool = {
 
   /* for step extensions */
   ext_post_step_hook();
+
+  check_cycle_count();
 
   stepped
 }

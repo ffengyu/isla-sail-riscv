@@ -8,15 +8,18 @@
 
 default Order dec
 
+$define SYMBOLIC
+
 $include <smt.sail>
 $include <option.sail>
 $include <arith.sail>
 $include <string.sail>
 $include "mapping.sail"
 $include <vector_dec.sail>
-$include <regfp.sail>
 $include <generic_equality.sail>
 $include "hex_bits.sail"
+
+$include "riscv_regfp.sail"
 
 
 val not_bit : bit -> bit
@@ -71,6 +74,8 @@ val pow2 = "pow2" : forall 'n. int('n) -> int(2 ^ 'n)
 val print = "print_endline" : string -> unit
 val print_string = "print_string" : (string, string) -> unit
 
+$ifndef SYMBOLIC
+
 val print_instr    = {ocaml: "Platform.print_instr", interpreter: "print_endline", c: "print_instr", lem: "print_dbg", _: "print_endline"} : string -> unit
 val print_reg      = {ocaml: "Platform.print_reg", interpreter: "print_endline", c: "print_reg", lem: "print_dbg", _: "print_endline"} : string -> unit
 val print_mem      = {ocaml: "Platform.print_mem_access", interpreter: "print_endline", c: "print_mem_access", lem: "print_dbg", _: "print_endline"} : string -> unit
@@ -87,6 +92,20 @@ function get_config_print_reg () = false
 function get_config_print_mem () = false
 function get_config_print_platform () = false
 
+$else
+
+function print_instr(s: string) -> unit = print_endline(s)
+function print_reg(s: string) -> unit = print_endline(s)
+function print_mem(s: string) -> unit = print_endline(s)
+function print_platform(s: string) -> unit = print_endline(s)
+
+function get_config_print_instr() -> bool = false
+function get_config_print_reg() -> bool = false
+function get_config_print_mem() -> bool = false
+function get_config_print_platform() -> bool = false
+
+$endif
+
 val sign_extend : forall 'n 'm, 'm >= 'n. (implicit('m), bits('n)) -> bits('m)
 val zero_extend : forall 'n 'm, 'm >= 'n. (implicit('m), bits('n)) -> bits('m)
 
@@ -100,11 +119,10 @@ overload zeros = {zeros_implicit}
 val ones : forall 'n, 'n >= 0 . implicit('n) -> bits('n)
 function ones (n) = sail_ones (n)
 
-val bool_to_bit : bool -> bit
-function bool_to_bit x = if x then bitone else bitzero
+val "one_if" : bool -> bits(1)
 
 val bool_to_bits : bool -> bits(1)
-function bool_to_bits x = [bool_to_bit(x)]
+function bool_to_bits x = one_if(x)
 
 val bit_to_bool : bit -> bool
 function bit_to_bool b = match b {
