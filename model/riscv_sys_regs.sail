@@ -110,10 +110,24 @@ $else
 register configuration rv_enable_writable_misa : bool = true
 register configuration rv_enable_rvc : bool = true
 register configuration rv_enable_fdext : bool = false
+register configuration rv_enable_zfinx : bool = false
+register configuration rv_enable_next : bool = false
+register configuration rv_enable_zcb : bool = false
+register configuration rv_enable_writable_fiom : bool = false
+register configuration rv_pmp_count : range(0, 64) = 0
+register configuration rv_pmp_grain : range(0, 63) = 0
+register configuration rv_enable_vext : bool = false
 
 function sys_enable_writable_misa() -> bool = rv_enable_writable_misa
 function sys_enable_rvc() -> bool = rv_enable_rvc
 function sys_enable_fdext() -> bool = rv_enable_fdext
+function sys_enable_zfinx() -> bool = rv_enable_zfinx
+function sys_enable_next() -> bool = rv_enable_next
+function sys_enable_zcb() -> bool = rv_enable_zcb
+function sys_enable_writable_fiom() -> bool = rv_enable_writable_fiom
+function sys_pmp_count() -> range(0, 64) = rv_pmp_count
+function sys_pmp_grain() -> range(0, 63) = rv_pmp_grain
+function sys_enable_vext() -> bool = rv_enable_vext
 
 $endif
 

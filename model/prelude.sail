@@ -119,6 +119,9 @@ overload zeros = {zeros_implicit}
 val ones : forall 'n, 'n >= 0 . implicit('n) -> bits('n)
 function ones (n) = sail_ones (n)
 
+val bool_to_bit : bool -> bit
+function bool_to_bit x = if x then bitone else bitzero
+
 val "one_if" : bool -> bits(1)
 
 val bool_to_bits : bool -> bits(1)
