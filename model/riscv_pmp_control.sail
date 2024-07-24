@@ -8,19 +8,17 @@
 
 /* address ranges */
 
-// TODO: handle the 34-bit paddr32 on RV32
+// [min, max) of the matching range, in units of 4 bytes.
+type pmp_addr_range_in_words = option((xlenbits, xlenbits))
 
-/* [min, max) of the matching range. */
-type pmp_addr_range = option((xlenbits, xlenbits))
-
-function pmpAddrRange(cfg: Pmpcfg_ent, pmpaddr: xlenbits, prev_pmpaddr: xlenbits) -> pmp_addr_range = {
+function pmpAddrRange(cfg: Pmpcfg_ent, pmpaddr: xlenbits, prev_pmpaddr: xlenbits) -> pmp_addr_range_in_words = {
   match pmpAddrMatchType_of_bits(cfg[A]) {
     OFF   => None(),
-    TOR   => { Some ((prev_pmpaddr << 2, pmpaddr << 2)) },
+    TOR   => { Some ((prev_pmpaddr, pmpaddr)) },
     NA4   => {
                // NA4 is not selectable when the PMP grain G >= 1. See pmpWriteCfg().
                assert(sys_pmp_grain() < 1, "NA4 cannot be selected when PMP grain G >= 1.");
-               let lo = pmpaddr << 2;
+               let lo = pmpaddr;
                Some((lo, lo + 4))
              },
     NAPOT => {
@@ -33,7 +31,7 @@ function pmpAddrRange(cfg: Pmpcfg_ent, pmpaddr: xlenbits, prev_pmpaddr: xlenbits
                let lo   = pmpaddr & (~ (mask));
                // mask + 1:        0b00000100000
                let len  = mask + 1;
-               Some((lo << 2, (lo + len) << 2))
+               Some((lo, (lo + len)))
              }
   }
 }
@@ -50,14 +48,47 @@ function pmpCheckRWX(ent, acc) = {
   }
 }
 
-// this needs to be called with the effective current privilege.
+/* this needs to be called with the effective current privilege */
+// YIQUN: different with PR
+// YIQUN: meaning of effect {rreg} and can be removed cuz
+// Since Sail 0.15 (released Nov 2022), effects have had no effect.
+// They now generate a deprecation warning. This commit removes all the
+// effect annotations from the model, thus fixing the compiler warnings.
 val pmpCheckPerms: (Pmpcfg_ent, AccessType(ext_access_type), Privilege) -> bool
 function pmpCheckPerms(ent, acc, priv) = {
-  match priv {
-    Machine => if   pmpLocked(ent)
-               then pmpCheckRWX(ent, acc)
-               else true,
-    _       => pmpCheckRWX(ent, acc)
+  match mseccfg.MML() {
+    0b1 =>
+      match (ent.L(), ent.R(), ent.W(), ent.X()) {
+        (0b1, 0b0, 0b1, _) =>
+          match acc {
+            Execute(_) => true,
+            Read(_)    => priv == Machine & ent.X() == 0b1,
+            _          => false
+          },
+        (0b0, 0b0, 0b1, _) =>
+          match acc {
+            Read(_)  => true,
+            Write(_) => priv == Machine | ent.X() == 0b1,
+            _        => false
+          },
+        (0b1, 0b1, 0b1, 0b1) =>
+          match acc {
+            Read(_) => true,
+            _       => false
+          },
+        (_, _, _, _) =>
+          if (priv == Machine) == pmpLockBit(ent)
+          then pmpCheckRWX(ent, acc)
+          else false
+      },
+    0b0 =>
+      match priv {
+        Machine =>
+          if pmpLockBit(ent)
+          then pmpCheckRWX(ent, acc)
+          else true,
+        _       => pmpCheckRWX(ent, acc)
+      }
   }
 }
 
@@ -65,18 +96,27 @@ function pmpCheckPerms(ent, acc, priv) = {
 
 enum pmpAddrMatch = {PMP_NoMatch, PMP_PartialMatch, PMP_Match}
 
-function pmpMatchAddr(addr: xlenbits, width: xlenbits, rng: pmp_addr_range) -> pmpAddrMatch = {
+function pmpMatchAddr(addr: xlenbits, width: xlenbits, rng: pmp_addr_range_in_words) -> pmpAddrMatch = {
   match rng {
     None()         => PMP_NoMatch,
-    Some((lo, hi)) => if   hi <=_u lo   /* to handle mis-configuration */
-                      then PMP_NoMatch
-                      else {
-                        if      (addr + width <=_u lo) | (hi <=_u addr)
-                        then    PMP_NoMatch
-                        else if (lo <=_u addr) & (addr + width <=_u hi)
-                        then    PMP_Match
-                        else    PMP_PartialMatch
-                      }
+    Some((lo, hi)) => {
+      // Convert to integers.
+      let addr  = unsigned(addr);
+      let width = unsigned(width);
+      // These are in units of 4 bytes.
+      let lo = unsigned(lo) * 4;
+      let hi = unsigned(hi) * 4;
+
+      if   hi <= lo   /* to handle mis-configuration */
+      then PMP_NoMatch
+      else {
+        if      (addr + width <= lo) | (hi <= addr)
+        then    PMP_NoMatch
+        else if (lo <= addr) & (addr + width <= hi)
+        then    PMP_Match
+        else    PMP_PartialMatch
+      }
+    },
   }
 }
 
@@ -113,10 +153,22 @@ function pmpCheck forall 'n, 'n > 0. (addr: xlenbits, width: int('n), acc: Acces
     match pmpMatchEntry(addr, width, acc, priv, pmpcfg_n[i], pmpReadAddrReg(i), prev_pmpaddr) {
       PMP_Success  => { return None(); },
       PMP_Fail     => { return Some(accessToFault(acc)); },
-      PMP_Continue => (),
+      // YIQUN: different with PR
+      PMP_Continue => ()
     }
   };
-  if priv == Machine then None() else Some(accessToFault(acc))
+  match priv {
+    Machine =>
+      if mseccfg.MMWP() == 0b1                /* Make Read, Write and execute denied by default, if condition meets for M mode */
+      then Some(accessToFault(acc))
+      else if mseccfg.MML() == 0b1            /* Make execute denied, if condition meets for M mode */
+      then match acc {
+             Execute(_) => Some(accessToFault(acc)),
+             _          => None()
+           }
+      else None(),
+    _       => Some(accessToFault(acc))       /* Make Read, Write and execute denied by default for S/U mode */
+  }
 }
 
 function init_pmp() -> unit = {
@@ -124,6 +176,11 @@ function init_pmp() -> unit = {
     sys_pmp_count() == 0 | sys_pmp_count() == 16 | sys_pmp_count() == 64,
     "sys_pmp_count() must be 0, 16, or 64"
   );
+
+  mseccfg->RLB() = 0b0;
+  mseccfg->MML() = 0b0;
+  mseccfg->MMWP() = 0b0;
+  mseccfgh = zero_extend(0b0);
 
   foreach (i from 0 to 63) {
     // On reset the PMP register's A and L bits are set to 0 unless the plaform

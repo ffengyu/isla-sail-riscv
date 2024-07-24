@@ -40,6 +40,15 @@ bitfield Pmpcfg_ent : bits(8) = {
   R : 0         /* read */
 }
 
+bitfield Mseccfg_ent : xlenbits = {
+  RLB  : 2,       /* Rule Locking Bypass */
+  MMWP : 1,       /* Machine Mode Whitelist Policy */
+  MML  : 0        /* Machine Mode Lockdown */
+}
+
+register mseccfg  : Mseccfg_ent
+register mseccfgh : bits(32)
+
 register pmpcfg_n : vector(64, dec, Pmpcfg_ent)
 register pmpaddr_n : vector(64, dec, xlenbits)
 
@@ -89,32 +98,46 @@ function pmpReadAddrReg(n : range(0, 63)) -> xlenbits = {
 }
 
 /* Helpers to handle locked entries */
-function pmpLocked(cfg: Pmpcfg_ent) -> bool =
-   cfg[L] == 0b1
+function pmpLockBit(cfg: Pmpcfg_ent) -> bool = cfg.L() == 0b1
 
-function pmpTORLocked(cfg: Pmpcfg_ent) -> bool =
-   (cfg[L] == 0b1) & (pmpAddrMatchType_of_bits(cfg[A]) == TOR)
+// YIQUN: change field accessor syntax to from field() to field[].
+function pmpLocked(cfg: Pmpcfg_ent) -> bool = (cfg.L() == 0b1) & (mseccfg.RLB() == 0b0)
 
-function pmpWriteCfg(n: range(0, 63), cfg: Pmpcfg_ent, v: bits(8)) -> Pmpcfg_ent =
-  if pmpLocked(cfg) then cfg
-  else {
-    // Bits 5 and 6 are zero.
-    let cfg = Mk_Pmpcfg_ent(v & 0x9f);
+function pmpTORLocked(cfg: Pmpcfg_ent) -> bool = pmpLocked(cfg) & (pmpAddrMatchType_of_bits(cfg.A()) == TOR)
 
-    // "The R, W, and X fields form a collective WARL field for which the combinations with R=0 and W=1 are reserved."
-    // In this implementation if R=0 and W=1 then R, W and X are all set to 0.
-    // This is the least risky option from a security perspective.
-    let cfg = if cfg.W() == 0b1 & cfg.R() == 0b0 then [cfg with X = 0b0, W = 0b0, R = 0b0] else cfg;
-
-    // "When G >= 1, the NA4 mode is not selectable."
-    // In this implementation we set it to OFF if NA4 is selected.
-    // This is the least risky option from a security perspective.
-    let cfg = if sys_pmp_grain() >= 1 & pmpAddrMatchType_of_bits(cfg.A()) == NA4
-              then [cfg with A = pmpAddrMatchType_to_bits(OFF)]
-              else cfg;
-
-    cfg
+// YIQUN: different with PR
+function pmpWriteCfg(n: range(0, 63), cfg: Pmpcfg_ent, v: bits(8)) -> Pmpcfg_ent = {
+  // Constructing legal Pmpcfg_ent by making bit 5 and 6 zero
+  let legal_v : Pmpcfg_ent = Mk_Pmpcfg_ent(v & 0x9f);
+  // YIQUN: RW=01 is reserved when MML = 0.
+  // In this implementation if R=0 and W=1 then R, W and X are all set to 0.
+  // This is the least risky option from a security perspective.
+  let legal_v : Pmpcfg_ent = match (mseccfg.MML(), legal_v.R(), legal_v.W()) {
+    (0b0, 0b0, 0b1) => [legal_v with X = 0b0, W = 0b0, R = 0b0],
+    (_, _, _)       => legal_v
+  };
+  // If locked then configuration is unchanged
+  if pmpLocked(cfg)
+  then cfg
+  /* To prevent adding a rule with execution privileges if MML is enabled unless RLB is set */
+  // YIQUN: It this the least risky option from a security perspective?
+  else if (mseccfg.MML() == 0b1 & mseccfg.RLB() == 0b0 & legal_v.L() == 0b1)
+  then {
+    match (legal_v.R(), legal_v.W(), legal_v.X()) {
+      (0b0, 0b0, 0b1) => cfg,
+      (0b0, 0b1, 0b0) => cfg,
+      (0b0, 0b1, 0b1) => cfg,
+      (0b1, 0b0, 0b1) => cfg,
+      (_, _, _)       => legal_v
+    }
   }
+  else if (sys_pmp_grain() >= 1 & pmpAddrMatchType_of_bits(cfg.A()) == NA4)
+  // "When G >= 1, the NA4 mode is not selectable."
+  // In this implementation we set it to OFF if NA4 is selected.
+  // This is the least risky option from a security perspective.
+  then [legal_v with A = pmpAddrMatchType_to_bits(OFF)]
+  else legal_v
+}
 
 function pmpWriteCfgReg(n : range(0, 15), v : xlenbits) -> unit = {
   if sizeof(xlen) == 32
@@ -145,4 +168,29 @@ function pmpWriteAddrReg(n : range(0, 63), v : xlenbits) -> unit = {
     pmpaddr_n[n],
     v,
   );
+}
+
+function mseccfgWrite(reg: Mseccfg_ent, v: xlenbits) -> Mseccfg_ent = {
+  let legal_v : Mseccfg_ent = Mk_Mseccfg_ent(zero_extend(v[2 .. 0]));
+  // YIQUN: different with PR. Not hard-coded.
+  let reg : Mseccfg_ent = match (reg.RLB(), legal_v.RLB()) {                   /* to set RLB, need to check PMPCFG_L */
+    (0b0, 0b1) => {
+      var setL : bool = false;
+      let num = sys_pmp_count();
+      foreach (i from 0 to (num - 1))
+        setL = setL | (pmpcfg_n[i].L() == 0b1);
+      if setL
+      then reg
+      else [reg with RLB = legal_v.RLB()]
+    },
+    (_, _)     => [reg with RLB = legal_v.RLB()]
+  };
+
+  let reg : Mseccfg_ent = match (reg.MML(), reg.MMWP()) {                      /* Implements stickiness of MML and MMWP bits, if once set remains set */
+    (0b0, 0b0) => [reg with MML = legal_v.MML(), MMWP = legal_v.MMWP()],
+    (0b0, 0b1) => [reg with MML = legal_v.MML()],
+    (0b1, 0b0) => [reg with MMWP = legal_v.MMWP()],
+    (0b1, 0b1) => reg
+  };
+  reg
 }

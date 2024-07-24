@@ -47,6 +47,9 @@ function readCSR csr : csreg -> xlenbits = {
     (0x343,  _) => mtval,
     (0x344,  _) => mip.bits,
 
+    (0x747,  _) => mseccfg.bits(),             // mseccfg
+    (0x757, 32) => mseccfgh,                   // mseccfgh
+
     // pmpcfgN
     (0x3A @ idx : bits(4),  _) if idx[0] == bitzero | sizeof(xlen) == 32 => pmpReadCfgReg(unsigned(idx)),
     // pmpaddrN. Unfortunately the PMP index does not nicely align with the CSR index bits.
@@ -133,6 +136,8 @@ function writeCSR (csr : csreg, value : xlenbits) -> unit = {
     (0x343,  _) => { mtval = value; Some(mtval) },
     (0x344,  _) => { mip = legalize_mip(mip, value); Some(mip.bits) },
 
+    (0x747,  _) => { mseccfg = mseccfgWrite(mseccfg, value); Some(mseccfg.bits()) },
+    (0x757, 32) => { Some(mseccfgh) }, // ignore writes for now
     // pmpcfgN
     (0x3A @ idx : bits(4),  _) if idx[0] == bitzero | sizeof(xlen) == 32 => {
       let idx = unsigned(idx);
