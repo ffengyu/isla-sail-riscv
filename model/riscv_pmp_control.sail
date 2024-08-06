@@ -150,7 +150,7 @@ function pmpCheck forall 'n, 'n > 0. (addr: xlenbits, width: int('n), acc: Acces
 
   foreach (i from 0 to 63) {
     let prev_pmpaddr = (if i > 0 then pmpReadAddrReg(i - 1) else zeros());
-    match pmpMatchEntry(addr, width, acc, priv, pmpcfg_n[i], pmpReadAddrReg(i), prev_pmpaddr) {
+    match pmpMatchEntry(addr, width, acc, priv, Pmpcfg(i), pmpReadAddrReg(i), prev_pmpaddr) {
       PMP_Success  => { return None(); },
       PMP_Fail     => { return Some(accessToFault(acc)); },
       // YIQUN: different with PR
@@ -185,6 +185,6 @@ function init_pmp() -> unit = {
   foreach (i from 0 to 63) {
     // On reset the PMP register's A and L bits are set to 0 unless the plaform
     // mandates a different value.
-    pmpcfg_n[i] = [pmpcfg_n[i] with A = pmpAddrMatchType_to_bits(OFF), L = 0b0];
+    Pmpcfg(i) = [Pmpcfg(i) with A = pmpAddrMatchType_to_bits(OFF), L = 0b0];
   };
 }
